@@ -1,0 +1,763 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { 
+  Plus, 
+  Trash2, 
+  Save, 
+  ChevronRight, 
+  ChevronLeft, 
+  BarChart3, 
+  TrendingUp, 
+  Newspaper, 
+  PieChart, 
+  Target,
+  Search,
+  LogOut,
+  Calendar,
+  Edit3,
+  Loader2,
+  AlertCircle,
+  Check,
+  RefreshCw,
+  ChevronDown,
+  ChevronUp,
+  User,
+  Filter,
+  Tag,
+  X
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'stock-analysis-note';
+
+// --- Constants ---
+const SECTOR_OPTIONS = [
+  'AI/반도체',
+  '2차전지',
+  '화장품/뷰티',
+  '지주사',
+  '금융/증권',
+  '자동차/운송',
+  '바이오/헬스케어',
+  '통신/미디어',
+  '소비재/유통',
+  '기타'
+];
+
+// --- Example Data ---
+const getExampleData = () => [
+  {
+    id: `sds-example`,
+    name: '삼성 SDS',
+    sector: 'AI/반도체',
+    date: '2026-01-31',
+    step1: { business: '정보통신 기술 서비스 (IT서비스, 클라우드, 물류 BPO, 데이터센터 등)' },
+    step2: { 
+      revenue: '영업이익 2,260억 (모건스탠리 추정치 3% 상회)', 
+      profit: '컨센서스 대비 -6% 하회했으나 견조함', 
+      netIncome: '-', 
+      comparison: '배당수익률 1.8% (업계평균 1.5% 상회)\n주주수익률 9.1% (업계평균 0.8% 압도적 상회)\nPER/PBR 저평가 상태' 
+    },
+    step3: { 
+      goodNews: '신한투자증권 목표가 21만원 상향 (IT서비스 성장)\nKB증권 목표가 23만원 상향 (생성형 AI, 클라우드 확대)', 
+      badNews: '영업이익 컨센서스 소폭 하회' 
+    },
+    step4: { 
+      support: '14만원 중반대 하방 지지 견고', 
+      resistance: '17만원대 기관 대량 매수세 유입', 
+      trend: 'EMA 100/200일선 상단 위치 (상승추세). 100일선 지지 테스트 중이라 1차 진입 적기.' 
+    },
+    step5: { 
+      buyPrice: '현재가 (약 16~17만원 선)', 
+      sellPrice: '210,000원 (1차 목표)', 
+      reasoning: '고점 대비 87% 수준으로 저평가. 기관 수급이 들어와 있고 상승 추세가 꺾이지 않음.' 
+    }
+  },
+  {
+    id: `kt-example`,
+    name: 'KT',
+    sector: '통신/미디어',
+    date: '2026-01-31',
+    step1: { business: '유무선 통신 서비스, 금융(BC카드), 기타 서비스 제공' },
+    step2: { 
+      revenue: '-', 
+      profit: '-', 
+      netIncome: '-', 
+      comparison: '배당수익률 4.0% (업계 3.2% 상회)\n주주수익률 0.9% (업계 대비 낮음)\n1년 수익률 24.1%' 
+    },
+    step3: { 
+      goodNews: 'AI 기본법 시행 맞춰 AI 자문위원회 운영 및 윤리 교육 강화 (미래 먹거리 준비)', 
+      badNews: '갤럭시 S25 허위광고 논란으로 과태료 500만원 (브랜드 이미지 타격 우려)' 
+    },
+    step4: { 
+      support: '48,000원 하방 지지 견고', 
+      resistance: '53,000원대 기관 대기 물량 존재', 
+      trend: '52주 고점 근처라 가격 모멘텀은 좋으나 단기 과열 주의' 
+    },
+    step5: { 
+      buyPrice: '50,000원 초중반', 
+      sellPrice: '50,000원 후반 (단기), 65,000원 (장기)', 
+      reasoning: '5만원 후반대 단기 조정 예상되므로 관망 후 5만원 초중반 오면 매수. 목표주가(6.5만) 및 공정가치(7.8만) 대비 상승 여력 충분.' 
+    }
+  }
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [userIdInput, setUserIdInput] = useState('');
+  const [isIdEditing, setIsIdEditing] = useState(false);
+  const [stocks, setStocks] = useState([]);
+  const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [activeStep, setActiveStep] = useState(1);
+  const [deleteId, setDeleteId] = useState(null);
+  const [expandedStockId, setExpandedStockId] = useState(null);
+  const [tempId, setTempId] = useState('');
+  const [selectedSector, setSelectedSector] = useState('전체'); // Sector Filter State
+  const [searchQuery, setSearchQuery] = useState(''); // Search Query State
+
+  // Initial State for New Analysis
+  const initialStockState = {
+    id: '',
+    name: '',
+    sector: '기타', // Default Sector
+    date: new Date().toISOString().split('T')[0],
+    step1: { business: '' },
+    step2: { revenue: '', profit: '', netIncome: '', comparison: '' },
+    step3: { goodNews: '', badNews: '' },
+    step4: { support: '', resistance: '', trend: '' },
+    step5: { buyPrice: '', sellPrice: '', reasoning: '' }
+  };
+
+  const [formData, setFormData] = useState(initialStockState);
+
+  // --- Auth & Init Logic ---
+  useEffect(() => {
+    const initAuth = async () => {
+      let savedId = localStorage.getItem('stock_app_user_id');
+      if (!savedId) {
+        savedId = `user-${Math.random().toString(36).substr(2, 6)}`;
+        localStorage.setItem('stock_app_user_id', savedId);
+      }
+      setUserIdInput(savedId);
+      setTempId(savedId);
+
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Login failed", err);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- Data Fetching ---
+  useEffect(() => {
+    if (!user || !userIdInput) return;
+    setLoading(true);
+
+    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput);
+    const unsubscribe = onSnapshot(q, async (snapshot) => {
+      const stockList = [];
+      snapshot.forEach((doc) => stockList.push({ id: doc.id, ...doc.data() }));
+      
+      const seedKey = `seeded_${userIdInput}_v2`; 
+      const hasSeeded = localStorage.getItem(seedKey);
+
+      if (stockList.length === 0 && !hasSeeded) {
+        const examples = getExampleData();
+        for (const ex of examples) {
+          await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, ex.id), {
+            ...ex,
+            updatedAt: serverTimestamp()
+          });
+        }
+        localStorage.setItem(seedKey, 'true');
+      } else {
+        stockList.sort((a, b) => new Date(b.date) - new Date(a.date));
+        setStocks(stockList);
+        setLoading(false);
+      }
+    }, (error) => {
+      console.error("Firestore error:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [user, userIdInput]);
+
+  // --- Handlers ---
+  const handleIdChange = (e) => {
+    e.preventDefault();
+    if (tempId.trim() !== userIdInput) {
+      setUserIdInput(tempId.trim());
+      localStorage.setItem('stock_app_user_id', tempId.trim());
+      setStocks([]); 
+    }
+    setIsIdEditing(false);
+  };
+
+  const saveStock = async () => {
+    if (!user || !formData.name) return;
+    
+    const stockId = formData.id || Date.now().toString();
+    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, stockId);
+    
+    try {
+      await setDoc(docRef, {
+        ...formData,
+        id: stockId,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      
+      setIsEditing(false);
+      setFormData(initialStockState);
+      setActiveStep(1);
+      setExpandedStockId(stockId);
+    } catch (error) {
+      console.error("Save error", error);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!user || !deleteId) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, deleteId));
+      setDeleteId(null);
+      if (isEditing && formData.id === deleteId) {
+        setIsEditing(false);
+      }
+      if (expandedStockId === deleteId) {
+        setExpandedStockId(null);
+      }
+    } catch (error) {
+      console.error("Delete error", error);
+    }
+  };
+
+  const startNewAnalysis = () => {
+    setFormData({ ...initialStockState, date: new Date().toISOString().split('T')[0] });
+    setIsEditing(true);
+    setActiveStep(1);
+    setExpandedStockId(null);
+  };
+
+  const editStock = (stock) => {
+    setFormData(stock);
+    setIsEditing(true);
+    setActiveStep(1);
+  };
+
+  const toggleExpand = (id) => {
+    setExpandedStockId(expandedStockId === id ? null : id);
+  };
+
+  // Filter & Search Logic
+  const filteredStocks = stocks.filter(stock => {
+    const matchesSector = selectedSector === '전체' || stock.sector === selectedSector;
+    const matchesSearch = stock.name.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesSector && matchesSearch;
+  });
+
+  if (loading && !stocks.length && !isEditing) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
+        <Loader2 className="w-12 h-12 animate-spin text-blue-500 mb-4" />
+        <p className="text-slate-400 font-medium text-lg">데이터 불러오는 중...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-blue-500/30">
+      
+      {/* --- Delete Modal --- */}
+      {deleteId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-sm w-full shadow-2xl scale-in-center">
+            <div className="flex items-center gap-3 text-rose-500 mb-4">
+              <AlertCircle className="w-6 h-6" />
+              <h3 className="text-xl font-bold">삭제하시겠습니까?</h3>
+            </div>
+            <p className="text-slate-400 text-sm mb-6 leading-relaxed">
+              이 작업은 되돌릴 수 없습니다.
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setDeleteId(null)} className="flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-colors">취소</button>
+              <button onClick={confirmDelete} className="flex-1 px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-colors shadow-lg shadow-rose-500/20">삭제</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Header --- */}
+      <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
+            <TrendingUp className="text-white w-5 h-5" />
+          </div>
+          <h2 className="text-lg font-bold tracking-tight text-white hidden sm:block">STOCK NOTE</h2>
+        </div>
+        
+        <div className="flex items-center gap-2 bg-slate-800/50 rounded-full pl-4 pr-1 py-1 border border-slate-700/50 hover:border-blue-500/50 transition-colors">
+          <User className="w-4 h-4 text-slate-400" />
+          {isIdEditing ? (
+            <form onSubmit={handleIdChange} className="flex items-center">
+              <input 
+                type="text" 
+                value={tempId}
+                onChange={(e) => setTempId(e.target.value)}
+                autoFocus
+                onBlur={handleIdChange}
+                className="bg-transparent border-none text-sm text-white focus:outline-none w-24 sm:w-32 font-mono"
+              />
+            </form>
+          ) : (
+            <span 
+              onClick={() => { setTempId(userIdInput); setIsIdEditing(true); }}
+              className="text-sm text-slate-300 cursor-pointer hover:text-white font-mono w-24 sm:w-32 truncate"
+              title="클릭하여 ID 변경"
+            >
+              {userIdInput}
+            </span>
+          )}
+          <button 
+            onClick={() => setIsIdEditing(!isIdEditing)}
+            className="p-1.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto p-4 sm:p-6 pb-24">
+        {isEditing ? (
+          /* --- Editor Wizard --- */
+          <div className="animate-in slide-in-from-bottom-4 duration-300">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
+              <button 
+                onClick={() => setIsEditing(false)}
+                className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
+              >
+                <ChevronLeft className="w-4 h-4" /> 리스트로 돌아가기
+              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={saveStock}
+                  disabled={!formData.name}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-500/20"
+                >
+                  <Save className="w-4 h-4" /> 저장
+                </button>
+              </div>
+            </div>
+
+            {/* Step Progress */}
+            <div className="flex justify-between mb-8 relative px-2">
+              <div className="absolute top-1/2 left-0 w-full h-0.5 bg-slate-800 -translate-y-1/2 z-0 rounded-full" />
+              {[1, 2, 3, 4, 5].map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setActiveStep(s)}
+                  className={`relative z-10 w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all duration-300 border-4 border-slate-950 ${
+                    activeStep === s 
+                      ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/20' 
+                      : activeStep > s 
+                        ? 'bg-emerald-500 text-white' 
+                        : 'bg-slate-800 text-slate-500 hover:bg-slate-700'
+                  }`}
+                >
+                  {activeStep > s ? <Check className="w-4 h-4" /> : s}
+                </button>
+              ))}
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl">
+              {/* Header Inputs: Name, Date, Sector */}
+              {activeStep === 1 && (
+                <div className="mb-8 grid grid-cols-1 sm:grid-cols-2 gap-5 p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
+                  <div className="col-span-1 sm:col-span-2">
+                    <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">종목명</label>
+                    <input 
+                      autoFocus
+                      type="text" 
+                      placeholder="예: 삼성전자"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold text-lg"
+                      value={formData.name}
+                      onChange={(e) => setFormData({...formData, name: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">섹터 분류</label>
+                    <div className="relative">
+                      <select 
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"
+                        value={formData.sector || '기타'}
+                        onChange={(e) => setFormData({...formData, sector: e.target.value})}
+                      >
+                        {SECTOR_OPTIONS.map(opt => (
+                          <option key={opt} value={opt}>{opt}</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">작성일</label>
+                    <input 
+                      type="date" 
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      value={formData.date}
+                      onChange={(e) => setFormData({...formData, date: e.target.value})}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Wizard Content */}
+              <div className="min-h-[300px]">
+                {activeStep === 1 && (
+                  <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3 mb-2">
+                      <PieChart className="text-blue-500 w-6 h-6" />
+                      <h3 className="text-xl font-bold text-white">1. 사업 모델</h3>
+                    </div>
+                    <p className="text-slate-400 text-sm">이 회사는 무엇을 팔아서 돈을 버나요?</p>
+                    <textarea 
+                      placeholder="사업 내용 요약..."
+                      className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[200px] leading-relaxed resize-none"
+                      value={formData.step1.business}
+                      onChange={(e) => setFormData({...formData, step1: { ...formData.step1, business: e.target.value }})}
+                    />
+                  </div>
+                )}
+                {/* Steps 2-5 same as before */}
+                {activeStep === 2 && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3">
+                      <BarChart3 className="text-emerald-500 w-6 h-6" />
+                      <h3 className="text-xl font-bold text-white">2. 재무 & 실적</h3>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4">
+                        <input type="text" placeholder="매출액 (성장성)" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white" value={formData.step2.revenue} onChange={(e) => setFormData({...formData, step2: {...formData.step2, revenue: e.target.value}})} />
+                        <input type="text" placeholder="영업이익 (수익성)" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white" value={formData.step2.profit} onChange={(e) => setFormData({...formData, step2: {...formData.step2, profit: e.target.value}})} />
+                        <textarea placeholder="동종업계 비교 및 기타 지표 (PER, PBR, 배당 등)" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white min-h-[120px] resize-none" value={formData.step2.comparison} onChange={(e) => setFormData({...formData, step2: {...formData.step2, comparison: e.target.value}})} />
+                    </div>
+                  </div>
+                )}
+                {activeStep === 3 && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3">
+                      <Newspaper className="text-amber-500 w-6 h-6" />
+                      <h3 className="text-xl font-bold text-white">3. 호재 & 악재</h3>
+                    </div>
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-emerald-400 text-xs font-bold uppercase ml-1">호재 (Positive)</label>
+                        <textarea className="w-full bg-slate-800/50 border border-emerald-500/30 rounded-xl px-4 py-3 text-white min-h-[120px] focus:ring-1 focus:ring-emerald-500 focus:outline-none resize-none" value={formData.step3.goodNews} onChange={(e) => setFormData({...formData, step3: {...formData.step3, goodNews: e.target.value}})} />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-rose-400 text-xs font-bold uppercase ml-1">악재 (Negative)</label>
+                        <textarea className="w-full bg-slate-800/50 border border-rose-500/30 rounded-xl px-4 py-3 text-white min-h-[120px] focus:ring-1 focus:ring-rose-500 focus:outline-none resize-none" value={formData.step3.badNews} onChange={(e) => setFormData({...formData, step3: {...formData.step3, badNews: e.target.value}})} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {activeStep === 4 && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3">
+                      <TrendingUp className="text-purple-500 w-6 h-6" />
+                      <h3 className="text-xl font-bold text-white">4. 차트 분석</h3>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <input type="text" placeholder="지지선 (바닥)" className="bg-slate-800 p-3 rounded-xl border border-slate-700 text-white" value={formData.step4.support} onChange={(e) => setFormData({...formData, step4: {...formData.step4, support: e.target.value}})} />
+                      <input type="text" placeholder="저항선 (천장)" className="bg-slate-800 p-3 rounded-xl border border-slate-700 text-white" value={formData.step4.resistance} onChange={(e) => setFormData({...formData, step4: {...formData.step4, resistance: e.target.value}})} />
+                    </div>
+                    <textarea placeholder="이평선 흐름 및 추세 판단" className="w-full bg-slate-800 p-3 rounded-xl border border-slate-700 min-h-[150px] text-white resize-none" value={formData.step4.trend} onChange={(e) => setFormData({...formData, step4: {...formData.step4, trend: e.target.value}})} />
+                  </div>
+                )}
+                {activeStep === 5 && (
+                  <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                    <div className="flex items-center gap-3">
+                      <Target className="text-blue-500 w-6 h-6" />
+                      <h3 className="text-xl font-bold text-white">5. 최종 전략</h3>
+                    </div>
+                    <div className="bg-blue-600/10 border border-blue-500/20 p-5 rounded-2xl space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <label className="text-slate-400 text-xs font-bold uppercase ml-1">매수 목표가</label>
+                            <input type="text" className="w-full bg-slate-900 p-3 rounded-xl border border-slate-700 text-blue-400 font-bold" value={formData.step5.buyPrice} onChange={(e) => setFormData({...formData, step5: {...formData.step5, buyPrice: e.target.value}})} />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-slate-400 text-xs font-bold uppercase ml-1">매도 목표가</label>
+                            <input type="text" className="w-full bg-slate-900 p-3 rounded-xl border border-slate-700 text-emerald-400 font-bold" value={formData.step5.sellPrice} onChange={(e) => setFormData({...formData, step5: {...formData.step5, sellPrice: e.target.value}})} />
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-slate-400 text-xs font-bold uppercase ml-1">종합 코멘트</label>
+                        <textarea placeholder="최종 결론" className="w-full bg-slate-900 p-4 rounded-xl border border-slate-700 min-h-[120px] text-white resize-none leading-relaxed" value={formData.step5.reasoning} onChange={(e) => setFormData({...formData, step5: {...formData.step5, reasoning: e.target.value}})} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Navigation */}
+              <div className="mt-8 flex justify-between pt-6 border-t border-slate-800">
+                <button 
+                  onClick={() => setActiveStep(Math.max(1, activeStep - 1))}
+                  disabled={activeStep === 1}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-slate-400 hover:text-white transition-colors disabled:opacity-0"
+                >
+                  <ChevronLeft className="w-5 h-5" /> 이전
+                </button>
+                {activeStep < 5 ? (
+                  <button 
+                    onClick={() => setActiveStep(activeStep + 1)}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-6 py-2.5 rounded-xl transition-all font-medium"
+                  >
+                    다음 <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button 
+                    onClick={saveStock}
+                    disabled={!formData.name}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-emerald-500/20"
+                  >
+                    완료
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          /* --- Main List View --- */
+          <div className="space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <h1 className="text-2xl font-bold text-white">내 종목 리스트</h1>
+              <button 
+                onClick={startNewAnalysis}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/10 active:scale-95 w-full sm:w-auto justify-center"
+              >
+                <Plus className="w-5 h-5" />
+                <span className="">새 분석 추가</span>
+              </button>
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+              <input 
+                type="text" 
+                placeholder="종목명 검색..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-12 pr-12 py-3.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-500"
+              />
+              {searchQuery && (
+                <button 
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            {/* Sector Filter Bar */}
+            <div className="overflow-x-auto pb-2 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-hide">
+              <div className="flex gap-2 min-w-max">
+                <button
+                  onClick={() => setSelectedSector('전체')}
+                  className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
+                    selectedSector === '전체' 
+                    ? 'bg-blue-600 border-blue-600 text-white' 
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                  }`}
+                >
+                  전체
+                </button>
+                {SECTOR_OPTIONS.map(sector => (
+                  <button
+                    key={sector}
+                    onClick={() => setSelectedSector(sector)}
+                    className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
+                      selectedSector === sector 
+                      ? 'bg-blue-600 border-blue-600 text-white' 
+                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
+                    }`}
+                  >
+                    {sector}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="grid gap-4">
+              {filteredStocks.length === 0 ? (
+                <div className="text-center py-20 text-slate-500 bg-slate-900/50 rounded-3xl border border-dashed border-slate-800">
+                  <p>{searchQuery ? `'${searchQuery}' 검색 결과가 없습니다.` : '해당 섹터의 종목이 없습니다.'}</p>
+                </div>
+              ) : (
+                filteredStocks.map((stock) => {
+                  const isExpanded = expandedStockId === stock.id;
+                  
+                  return (
+                    <div 
+                      key={stock.id}
+                      className={`bg-slate-900 border transition-all duration-300 overflow-hidden rounded-3xl ${
+                        isExpanded ? 'border-blue-500/50 shadow-2xl shadow-blue-900/10' : 'border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Card Header */}
+                      <div 
+                        onClick={() => toggleExpand(stock.id)}
+                        className="p-5 cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative"
+                      >
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-1">
+                            <span className="flex items-center gap-1.5 text-slate-500 text-xs font-bold">
+                              <Calendar className="w-3 h-3" /> {stock.date}
+                            </span>
+                            {stock.sector && (
+                              <span className="flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-blue-300 border border-slate-700">
+                                <Tag className="w-3 h-3" /> {stock.sector}
+                              </span>
+                            )}
+                          </div>
+                          <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors flex items-center gap-2">
+                            {stock.name}
+                            {isExpanded && <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-normal">상세보기</span>}
+                          </h3>
+                        </div>
+                        
+                        <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto mt-2 sm:mt-0">
+                          <div className="flex flex-col items-start sm:items-end">
+                            <span className="text-slate-500 text-xs">매수 목표</span>
+                            <span className="text-blue-400 font-bold font-mono">{stock.step5.buyPrice || '-'}</span>
+                          </div>
+                          <div className="flex flex-col items-start sm:items-end">
+                            <span className="text-slate-500 text-xs">매도 목표</span>
+                            <span className="text-emerald-400 font-bold font-mono">{stock.step5.sellPrice || '-'}</span>
+                          </div>
+                          <div className={`p-2 rounded-full bg-slate-800 text-slate-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
+                            <ChevronDown className="w-5 h-5" />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Card Body */}
+                      {isExpanded && (
+                        <div className="px-5 pb-6 pt-0 border-t border-slate-800/50 bg-slate-950/30 animate-in slide-in-from-top-2 duration-200">
+                          {/* Action Bar */}
+                          <div className="flex justify-end gap-2 py-4 mb-2">
+                            <button onClick={(e) => { e.stopPropagation(); editStock(stock); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors">
+                              <Edit3 className="w-3.5 h-3.5" /> 수정
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); setDeleteId(stock.id); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-900/20 hover:bg-rose-900/40 text-rose-500 text-xs font-bold transition-colors">
+                              <Trash2 className="w-3.5 h-3.5" /> 삭제
+                            </button>
+                          </div>
+
+                          {/* Content Grid */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            
+                            {/* 1. Business */}
+                            <div className="col-span-1 md:col-span-2 space-y-2">
+                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold">
+                                <PieChart className="w-4 h-4" /> 사업 모델
+                              </div>
+                              <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
+                                {stock.step1.business || "내용 없음"}
+                              </div>
+                            </div>
+
+                            {/* 2. Financials */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
+                                <BarChart3 className="w-4 h-4" /> 재무 & 실적
+                              </div>
+                              <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm space-y-2">
+                                {stock.step2.revenue && <p><span className="text-slate-500">매출:</span> {stock.step2.revenue}</p>}
+                                {stock.step2.profit && <p><span className="text-slate-500">영업이익:</span> {stock.step2.profit}</p>}
+                                <div className="pt-2 border-t border-slate-700/50 mt-2 text-xs text-slate-400 whitespace-pre-wrap">
+                                  {stock.step2.comparison}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* 3. News */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-amber-400 text-sm font-bold">
+                                <Newspaper className="w-4 h-4" /> 이슈
+                              </div>
+                              <div className="p-4 rounded-xl bg-slate-800/50 text-sm space-y-3">
+                                {stock.step3.goodNews && (
+                                  <div className="flex gap-2">
+                                    <Plus className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+                                    <span className="text-emerald-100/80 whitespace-pre-wrap">{stock.step3.goodNews}</span>
+                                  </div>
+                                )}
+                                {stock.step3.badNews && (
+                                  <div className="flex gap-2">
+                                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                                    <span className="text-rose-100/80 whitespace-pre-wrap">{stock.step3.badNews}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 4. Chart */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-purple-400 text-sm font-bold">
+                                <TrendingUp className="w-4 h-4" /> 차트 분석
+                              </div>
+                              <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm space-y-2">
+                                <div className="flex gap-4">
+                                  {stock.step4.support && <span className="bg-slate-700/50 px-2 py-1 rounded text-xs">지지: {stock.step4.support}</span>}
+                                  {stock.step4.resistance && <span className="bg-slate-700/50 px-2 py-1 rounded text-xs">저항: {stock.step4.resistance}</span>}
+                                </div>
+                                <p className="whitespace-pre-wrap leading-relaxed">{stock.step4.trend}</p>
+                              </div>
+                            </div>
+
+                            {/* 5. Strategy */}
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold">
+                                <Target className="w-4 h-4" /> 최종 결론
+                              </div>
+                              <div className="p-4 rounded-xl bg-blue-900/10 border border-blue-500/20 text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">
+                                {stock.step5.reasoning}
+                              </div>
+                            </div>
+
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
