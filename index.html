@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth'; // signInWithCustomToken 제거
 import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { 
   Plus, Trash2, Save, ChevronRight, ChevronLeft, BarChart3, TrendingUp, Newspaper, 
@@ -9,32 +9,27 @@ import {
 } from 'lucide-react';
 
 // ==================================================================================
-// [서버 동기화 설정]
-// 1. 영어 공부 앱에서 사용했던 Firebase 설정값을 그대로 사용하셔도 됩니다.
-// 2. 이 앱의 데이터는 'stock-analysis-note'라는 이름으로 따로 저장되므로 섞이지 않습니다.
+// [사용자 고정 설정 모드]
+// 이 코드는 사용자님의 Firebase 프로젝트 'self-improvement-aa934'에 직접 연결됩니다.
+// 오류 원인이었던 자동 설정 로직을 제거하고, 본인 키로 고정했습니다.
 // ==================================================================================
-let firebaseConfig;
-try {
-  // 미리보기 환경용 자동 설정
-  firebaseConfig = JSON.parse(__firebase_config);
-} catch (e) {
-  // 깃허브 배포 시 이곳에 본인의 Firebase 키를 입력하세요. (영어 앱 키와 동일해도 OK)
-  firebaseConfig = {
-   apiKey: "AIzaSyDi1i0_5PxnWxg-7NrDtwPaIOr_WNplSSk",
-                authDomain: "self-improvement-aa934.firebaseapp.com",
-                projectId: "self-improvement-aa934",
-                storageBucket: "self-improvement-aa934.firebasestorage.app",
-                messagingSenderId: "141457601477",
-                appId: "1:141457601477:web:5f81c11d0f1dff8384d1ac",
-                measurementId: "G-HS8HFK7YMQ"
-  };
-}
+const firebaseConfig = {
+  apiKey: "AIzaSyDi1i0_5PxnWxg-7NrDtwPaIOr_WNplSSk",
+  authDomain: "self-improvement-aa934.firebaseapp.com",
+  projectId: "self-improvement-aa934",
+  storageBucket: "self-improvement-aa934.firebasestorage.app",
+  messagingSenderId: "141457601477",
+  appId: "1:141457601477:web:5f81c11d0f1dff8384d1ac",
+  measurementId: "G-HS8HFK7YMQ"
+};
 
+// 앱 초기화
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// 이 ID 덕분에 영어 앱 데이터와 섞이지 않습니다.
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'stock-analysis-note';
+
+// 앱 데이터 구분용 ID
+const APP_COLLECTION_ID = 'stock-analysis-note';
 
 // --- Constants ---
 const SECTOR_OPTIONS = [
@@ -42,7 +37,7 @@ const SECTOR_OPTIONS = [
   '자동차/운송', '바이오/헬스케어', '통신/미디어', '소비재/유통', '기타'
 ];
 
-// --- Example Data (자동 생성용) ---
+// --- Example Data ---
 const getExampleData = () => [
   {
     id: `sds-example`,
@@ -141,15 +136,12 @@ export default function App() {
       setUserIdInput(savedId);
       setTempId(savedId);
 
-      // Firebase 로그인
+      // [수정됨] 토큰 방식 제거 -> 익명 로그인만 사용
+      // 이렇게 하면 'auth/custom-token-mismatch' 에러가 사라집니다.
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
+        await signInAnonymously(auth);
       } catch (err) {
-        console.error("Login failed", err);
+        console.error("Login failed. Check Firebase Console > Authentication > Sign-in method > Anonymous enabled?", err);
       }
     };
     initAuth();
@@ -165,14 +157,12 @@ export default function App() {
     if (!user || !userIdInput) return;
     setLoading(true);
 
-    // 사용자 ID별 컬렉션 구독
-    const q = collection(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput);
+    const q = collection(db, 'artifacts', APP_COLLECTION_ID, 'users', user.uid, 'stocks_' + userIdInput);
     
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const stockList = [];
       snapshot.forEach((doc) => stockList.push({ id: doc.id, ...doc.data() }));
       
-      // 자동 데이터 시딩 (처음 사용하는 ID일 경우 예시 데이터 추가)
       const seedKey = `seeded_${userIdInput}_v3`; 
       const hasSeeded = localStorage.getItem(seedKey);
 
@@ -180,7 +170,7 @@ export default function App() {
         const examples = getExampleData();
         for (const ex of examples) {
           try {
-            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, ex.id), {
+            await setDoc(doc(db, 'artifacts', APP_COLLECTION_ID, 'users', user.uid, 'stocks_' + userIdInput, ex.id), {
               ...ex,
               updatedAt: serverTimestamp()
             });
@@ -209,7 +199,7 @@ export default function App() {
     if (newId && newId !== userIdInput) {
       setUserIdInput(newId);
       localStorage.setItem('stock_app_user_id', newId);
-      setStocks([]); // 데이터 로딩 중 화면 클리어
+      setStocks([]); 
     }
     setIsIdEditing(false);
   };
@@ -218,7 +208,7 @@ export default function App() {
     if (!user || !formData.name) return;
     
     const stockId = formData.id || Date.now().toString();
-    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, stockId);
+    const docRef = doc(db, 'artifacts', APP_COLLECTION_ID, 'users', user.uid, 'stocks_' + userIdInput, stockId);
     
     try {
       await setDoc(docRef, {
@@ -230,16 +220,17 @@ export default function App() {
       setIsEditing(false);
       setFormData(initialStockState);
       setActiveStep(1);
-      setExpandedStockId(stockId); // 저장 후 해당 항목 펼치기
+      setExpandedStockId(stockId);
     } catch (error) {
       console.error("Save error", error);
+      alert("저장 실패: Firebase 권한을 확인해주세요.");
     }
   };
 
   const confirmDelete = async () => {
     if (!user || !deleteId) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, deleteId));
+      await deleteDoc(doc(db, 'artifacts', APP_COLLECTION_ID, 'users', user.uid, 'stocks_' + userIdInput, deleteId));
       setDeleteId(null);
       if (isEditing && formData.id === deleteId) {
         setIsEditing(false);
@@ -252,7 +243,6 @@ export default function App() {
     }
   };
 
-  // --- Helper Functions ---
   const startNewAnalysis = () => {
     setFormData({ ...initialStockState, date: new Date().toISOString().split('T')[0] });
     setIsEditing(true);
@@ -270,7 +260,6 @@ export default function App() {
     setExpandedStockId(expandedStockId === id ? null : id);
   };
 
-  // Filter & Search Logic
   const filteredStocks = stocks.filter(stock => {
     const matchesSector = selectedSector === '전체' || stock.sector === selectedSector;
     const matchesSearch = stock.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -288,8 +277,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans selection:bg-blue-500/30">
-      
-      {/* --- Delete Modal --- */}
+      {/* Delete Modal */}
       {deleteId && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-slate-900 border border-slate-800 p-6 rounded-3xl max-w-sm w-full shadow-2xl scale-in-center">
@@ -297,9 +285,7 @@ export default function App() {
               <AlertCircle className="w-6 h-6" />
               <h3 className="text-xl font-bold">삭제하시겠습니까?</h3>
             </div>
-            <p className="text-slate-400 text-sm mb-6 leading-relaxed">
-              이 작업은 클라우드에서 영구적으로 삭제됩니다.
-            </p>
+            <p className="text-slate-400 text-sm mb-6 leading-relaxed">이 작업은 영구적으로 삭제됩니다.</p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteId(null)} className="flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-colors">취소</button>
               <button onClick={confirmDelete} className="flex-1 px-4 py-3 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition-colors shadow-lg shadow-rose-500/20">삭제</button>
@@ -308,7 +294,7 @@ export default function App() {
         </div>
       )}
 
-      {/* --- Header --- */}
+      {/* Header */}
       <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-500/20">
@@ -316,146 +302,71 @@ export default function App() {
           </div>
           <h2 className="text-lg font-bold tracking-tight text-white hidden sm:block">STOCK NOTE</h2>
         </div>
-        
-        {/* User ID Section */}
         <div className="flex items-center gap-2 bg-slate-800/50 rounded-full pl-4 pr-1 py-1 border border-slate-700/50 hover:border-blue-500/50 transition-colors">
           <User className="w-4 h-4 text-slate-400" />
           {isIdEditing ? (
             <form onSubmit={handleIdChange} className="flex items-center">
-              <input 
-                type="text" 
-                value={tempId}
-                onChange={(e) => setTempId(e.target.value)}
-                autoFocus
-                onBlur={handleIdChange}
-                className="bg-transparent border-none text-sm text-white focus:outline-none w-24 sm:w-32 font-mono"
-              />
+              <input type="text" value={tempId} onChange={(e) => setTempId(e.target.value)} autoFocus onBlur={handleIdChange} className="bg-transparent border-none text-sm text-white focus:outline-none w-24 sm:w-32 font-mono" />
             </form>
           ) : (
-            <span 
-              onClick={() => { setTempId(userIdInput); setIsIdEditing(true); }}
-              className="text-sm text-slate-300 cursor-pointer hover:text-white font-mono w-24 sm:w-32 truncate"
-              title="클릭하여 ID 변경 (데이터 동기화용)"
-            >
-              {userIdInput}
-            </span>
+            <span onClick={() => { setTempId(userIdInput); setIsIdEditing(true); }} className="text-sm text-slate-300 cursor-pointer hover:text-white font-mono w-24 sm:w-32 truncate" title="클릭하여 ID 변경">{userIdInput}</span>
           )}
-          <button 
-            onClick={() => setIsIdEditing(!isIdEditing)}
-            className="p-1.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-          >
-            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+          <button onClick={() => setIsIdEditing(!isIdEditing)} className="p-1.5 rounded-full bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"><RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} /></button>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto p-4 sm:p-6 pb-24">
         {isEditing ? (
-          /* --- Editor Wizard --- */
+          /* Editor */
           <div className="animate-in slide-in-from-bottom-4 duration-300">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 gap-4">
-              <button 
-                onClick={() => setIsEditing(false)}
-                className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"
-              >
-                <ChevronLeft className="w-4 h-4" /> 리스트로 돌아가기
-              </button>
+              <button onClick={() => setIsEditing(false)} className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm font-medium"><ChevronLeft className="w-4 h-4" /> 리스트로 돌아가기</button>
               <div className="flex items-center gap-2">
-                <button 
-                  onClick={saveStock}
-                  disabled={!formData.name}
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-500/20"
-                >
-                  <Save className="w-4 h-4" /> 저장 (Cloud)
-                </button>
+                <button onClick={saveStock} disabled={!formData.name} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-500/20"><Save className="w-4 h-4" /> 저장 (Cloud)</button>
               </div>
             </div>
-
-            {/* Step Progress */}
+            
             <div className="flex justify-between mb-8 relative px-2">
               <div className="absolute top-1/2 left-0 w-full h-0.5 bg-slate-800 -translate-y-1/2 z-0 rounded-full" />
               {[1, 2, 3, 4, 5].map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setActiveStep(s)}
-                  className={`relative z-10 w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all duration-300 border-4 border-slate-950 ${
-                    activeStep === s 
-                      ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/20' 
-                      : activeStep > s 
-                        ? 'bg-emerald-500 text-white' 
-                        : 'bg-slate-800 text-slate-500 hover:bg-slate-700'
-                  }`}
-                >
-                  {activeStep > s ? <Check className="w-4 h-4" /> : s}
-                </button>
+                <button key={s} onClick={() => setActiveStep(s)} className={`relative z-10 w-8 h-8 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm transition-all duration-300 border-4 border-slate-950 ${activeStep === s ? 'bg-blue-600 text-white scale-110 shadow-lg shadow-blue-500/20' : activeStep > s ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-500 hover:bg-slate-700'}`}>{activeStep > s ? <Check className="w-4 h-4" /> : s}</button>
               ))}
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl">
-              {/* Header Inputs */}
               {activeStep === 1 && (
                 <div className="mb-8 grid grid-cols-1 sm:grid-cols-2 gap-5 p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
                   <div className="col-span-1 sm:col-span-2">
                     <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">종목명</label>
-                    <input 
-                      autoFocus
-                      type="text" 
-                      placeholder="예: 삼성전자"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold text-lg"
-                      value={formData.name}
-                      onChange={(e) => setFormData({...formData, name: e.target.value})}
-                    />
+                    <input autoFocus type="text" placeholder="예: 삼성전자" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold text-lg" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
                   </div>
                   <div>
                     <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">섹터 분류</label>
                     <div className="relative">
-                      <select 
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"
-                        value={formData.sector || '기타'}
-                        onChange={(e) => setFormData({...formData, sector: e.target.value})}
-                      >
-                        {SECTOR_OPTIONS.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
+                      <select className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none" value={formData.sector || '기타'} onChange={(e) => setFormData({...formData, sector: e.target.value})}>
+                        {SECTOR_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                       </select>
                       <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
                     </div>
                   </div>
                   <div>
                     <label className="block text-slate-500 text-xs font-bold mb-2 uppercase">작성일</label>
-                    <input 
-                      type="date" 
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      value={formData.date}
-                      onChange={(e) => setFormData({...formData, date: e.target.value})}
-                    />
+                    <input type="date" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} />
                   </div>
                 </div>
               )}
 
-              {/* Wizard Content */}
               <div className="min-h-[300px]">
                 {activeStep === 1 && (
                   <div className="space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex items-center gap-3 mb-2">
-                      <PieChart className="text-blue-500 w-6 h-6" />
-                      <h3 className="text-xl font-bold text-white">1. 사업 모델</h3>
-                    </div>
+                    <div className="flex items-center gap-3 mb-2"><PieChart className="text-blue-500 w-6 h-6" /><h3 className="text-xl font-bold text-white">1. 사업 모델</h3></div>
                     <p className="text-slate-400 text-sm">이 회사는 무엇을 팔아서 돈을 버나요?</p>
-                    <textarea 
-                      placeholder="사업 내용 요약..."
-                      className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[200px] leading-relaxed resize-none"
-                      value={formData.step1.business}
-                      onChange={(e) => setFormData({...formData, step1: { ...formData.step1, business: e.target.value }})}
-                    />
+                    <textarea placeholder="사업 내용 요약..." className="w-full bg-slate-800 border border-slate-700 rounded-2xl px-5 py-4 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-h-[200px] leading-relaxed resize-none" value={formData.step1.business} onChange={(e) => setFormData({...formData, step1: { ...formData.step1, business: e.target.value }})} />
                   </div>
                 )}
                 {activeStep === 2 && (
                   <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex items-center gap-3">
-                      <BarChart3 className="text-emerald-500 w-6 h-6" />
-                      <h3 className="text-xl font-bold text-white">2. 재무 & 실적</h3>
-                    </div>
+                    <div className="flex items-center gap-3"><BarChart3 className="text-emerald-500 w-6 h-6" /><h3 className="text-xl font-bold text-white">2. 재무 & 실적</h3></div>
                     <div className="grid grid-cols-1 gap-4">
                         <input type="text" placeholder="매출액 (성장성)" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white" value={formData.step2.revenue} onChange={(e) => setFormData({...formData, step2: {...formData.step2, revenue: e.target.value}})} />
                         <input type="text" placeholder="영업이익 (수익성)" className="w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-white" value={formData.step2.profit} onChange={(e) => setFormData({...formData, step2: {...formData.step2, profit: e.target.value}})} />
@@ -465,10 +376,7 @@ export default function App() {
                 )}
                 {activeStep === 3 && (
                   <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex items-center gap-3">
-                      <Newspaper className="text-amber-500 w-6 h-6" />
-                      <h3 className="text-xl font-bold text-white">3. 호재 & 악재</h3>
-                    </div>
+                    <div className="flex items-center gap-3"><Newspaper className="text-amber-500 w-6 h-6" /><h3 className="text-xl font-bold text-white">3. 호재 & 악재</h3></div>
                     <div className="grid grid-cols-1 gap-4">
                       <div className="space-y-2">
                         <label className="text-emerald-400 text-xs font-bold uppercase ml-1">호재 (Positive)</label>
@@ -483,10 +391,7 @@ export default function App() {
                 )}
                 {activeStep === 4 && (
                   <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex items-center gap-3">
-                      <TrendingUp className="text-purple-500 w-6 h-6" />
-                      <h3 className="text-xl font-bold text-white">4. 차트 분석</h3>
-                    </div>
+                    <div className="flex items-center gap-3"><TrendingUp className="text-purple-500 w-6 h-6" /><h3 className="text-xl font-bold text-white">4. 차트 분석</h3></div>
                     <div className="grid grid-cols-2 gap-4">
                       <input type="text" placeholder="지지선 (바닥)" className="bg-slate-800 p-3 rounded-xl border border-slate-700 text-white" value={formData.step4.support} onChange={(e) => setFormData({...formData, step4: {...formData.step4, support: e.target.value}})} />
                       <input type="text" placeholder="저항선 (천장)" className="bg-slate-800 p-3 rounded-xl border border-slate-700 text-white" value={formData.step4.resistance} onChange={(e) => setFormData({...formData, step4: {...formData.step4, resistance: e.target.value}})} />
@@ -496,10 +401,7 @@ export default function App() {
                 )}
                 {activeStep === 5 && (
                   <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                    <div className="flex items-center gap-3">
-                      <Target className="text-blue-500 w-6 h-6" />
-                      <h3 className="text-xl font-bold text-white">5. 최종 전략</h3>
-                    </div>
+                    <div className="flex items-center gap-3"><Target className="text-blue-500 w-6 h-6" /><h3 className="text-xl font-bold text-white">5. 최종 전략</h3></div>
                     <div className="bg-blue-600/10 border border-blue-500/20 p-5 rounded-2xl space-y-4">
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-1">
@@ -522,96 +424,40 @@ export default function App() {
 
               {/* Navigation */}
               <div className="mt-8 flex justify-between pt-6 border-t border-slate-800">
-                <button 
-                  onClick={() => setActiveStep(Math.max(1, activeStep - 1))}
-                  disabled={activeStep === 1}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-slate-400 hover:text-white transition-colors disabled:opacity-0"
-                >
-                  <ChevronLeft className="w-5 h-5" /> 이전
-                </button>
+                <button onClick={() => setActiveStep(Math.max(1, activeStep - 1))} disabled={activeStep === 1} className="flex items-center gap-2 px-4 py-2 rounded-xl text-slate-400 hover:text-white transition-colors disabled:opacity-0"><ChevronLeft className="w-5 h-5" /> 이전</button>
                 {activeStep < 5 ? (
-                  <button 
-                    onClick={() => setActiveStep(activeStep + 1)}
-                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-6 py-2.5 rounded-xl transition-all font-medium"
-                  >
-                    다음 <ChevronRight className="w-4 h-4" />
-                  </button>
+                  <button onClick={() => setActiveStep(activeStep + 1)} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-white px-6 py-2.5 rounded-xl transition-all font-medium">다음 <ChevronRight className="w-4 h-4" /></button>
                 ) : (
-                  <button 
-                    onClick={saveStock}
-                    disabled={!formData.name}
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-emerald-500/20"
-                  >
-                    완료
-                  </button>
+                  <button onClick={saveStock} disabled={!formData.name} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-8 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-emerald-500/20">완료</button>
                 )}
               </div>
             </div>
           </div>
         ) : (
-          /* --- Main List View --- */
+          /* List View */
           <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <h1 className="text-2xl font-bold text-white">내 종목 리스트</h1>
-              <button 
-                onClick={startNewAnalysis}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/10 active:scale-95 w-full sm:w-auto justify-center"
-              >
-                <Plus className="w-5 h-5" />
-                <span className="">새 분석 추가</span>
-              </button>
+              <button onClick={startNewAnalysis} className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/10 active:scale-95 w-full sm:w-auto justify-center"><Plus className="w-5 h-5" /><span className="">새 분석 추가</span></button>
             </div>
 
-            {/* Search Bar */}
             <div className="relative">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
-              <input 
-                type="text" 
-                placeholder="종목명 검색..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-12 pr-12 py-3.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-500"
-              />
+              <input type="text" placeholder="종목명 검색..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-2xl pl-12 pr-12 py-3.5 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-500" />
               {searchQuery && (
-                <button 
-                  onClick={() => setSearchQuery('')}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
               )}
             </div>
 
-            {/* Sector Filter Bar */}
             <div className="overflow-x-auto pb-2 -mx-4 sm:mx-0 px-4 sm:px-0 scrollbar-hide">
               <div className="flex gap-2 min-w-max">
-                <button
-                  onClick={() => setSelectedSector('전체')}
-                  className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-                    selectedSector === '전체' 
-                    ? 'bg-blue-600 border-blue-600 text-white' 
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                  }`}
-                >
-                  전체
-                </button>
+                <button onClick={() => setSelectedSector('전체')} className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${selectedSector === '전체' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'}`}>전체</button>
                 {SECTOR_OPTIONS.map(sector => (
-                  <button
-                    key={sector}
-                    onClick={() => setSelectedSector(sector)}
-                    className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-                      selectedSector === sector 
-                      ? 'bg-blue-600 border-blue-600 text-white' 
-                      : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'
-                    }`}
-                  >
-                    {sector}
-                  </button>
+                  <button key={sector} onClick={() => setSelectedSector(sector)} className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${selectedSector === sector ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:border-slate-600'}`}>{sector}</button>
                 ))}
               </div>
             </div>
 
-            {/* List */}
             <div className="grid gap-4">
               {filteredStocks.length === 0 ? (
                 <div className="text-center py-20 text-slate-500 bg-slate-900/50 rounded-3xl border border-dashed border-slate-800">
@@ -620,117 +466,50 @@ export default function App() {
               ) : (
                 filteredStocks.map((stock) => {
                   const isExpanded = expandedStockId === stock.id;
-                  
                   return (
-                    <div 
-                      key={stock.id}
-                      className={`bg-slate-900 border transition-all duration-300 overflow-hidden rounded-3xl ${
-                        isExpanded ? 'border-blue-500/50 shadow-2xl shadow-blue-900/10' : 'border-slate-800 hover:border-slate-700'
-                      }`}
-                    >
-                      {/* Card Header */}
-                      <div 
-                        onClick={() => toggleExpand(stock.id)}
-                        className="p-5 cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative"
-                      >
+                    <div key={stock.id} className={`bg-slate-900 border transition-all duration-300 overflow-hidden rounded-3xl ${isExpanded ? 'border-blue-500/50 shadow-2xl shadow-blue-900/10' : 'border-slate-800 hover:border-slate-700'}`}>
+                      <div onClick={() => toggleExpand(stock.id)} className="p-5 cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-4 relative">
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-1">
-                            <span className="flex items-center gap-1.5 text-slate-500 text-xs font-bold">
-                              <Calendar className="w-3 h-3" /> {stock.date}
-                            </span>
-                            {stock.sector && (
-                              <span className="flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-blue-300 border border-slate-700">
-                                <Tag className="w-3 h-3" /> {stock.sector}
-                              </span>
-                            )}
+                            <span className="flex items-center gap-1.5 text-slate-500 text-xs font-bold"><Calendar className="w-3 h-3" /> {stock.date}</span>
+                            {stock.sector && <span className="flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded bg-slate-800 text-blue-300 border border-slate-700"><Tag className="w-3 h-3" /> {stock.sector}</span>}
                           </div>
-                          <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors flex items-center gap-2">
-                            {stock.name}
-                            {isExpanded && <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-normal">상세보기</span>}
-                          </h3>
+                          <h3 className="text-xl font-bold text-white group-hover:text-blue-400 transition-colors flex items-center gap-2">{stock.name}{isExpanded && <span className="text-xs bg-blue-500/20 text-blue-300 px-2 py-0.5 rounded-full font-normal">상세보기</span>}</h3>
                         </div>
-                        
                         <div className="flex items-center justify-between sm:justify-end gap-6 w-full sm:w-auto mt-2 sm:mt-0">
-                          <div className="flex flex-col items-start sm:items-end">
-                            <span className="text-slate-500 text-xs">매수 목표</span>
-                            <span className="text-blue-400 font-bold font-mono">{stock.step5.buyPrice || '-'}</span>
-                          </div>
-                          <div className="flex flex-col items-start sm:items-end">
-                            <span className="text-slate-500 text-xs">매도 목표</span>
-                            <span className="text-emerald-400 font-bold font-mono">{stock.step5.sellPrice || '-'}</span>
-                          </div>
-                          <div className={`p-2 rounded-full bg-slate-800 text-slate-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
-                            <ChevronDown className="w-5 h-5" />
-                          </div>
+                          <div className="flex flex-col items-start sm:items-end"><span className="text-slate-500 text-xs">매수 목표</span><span className="text-blue-400 font-bold font-mono">{stock.step5.buyPrice || '-'}</span></div>
+                          <div className="flex flex-col items-start sm:items-end"><span className="text-slate-500 text-xs">매도 목표</span><span className="text-emerald-400 font-bold font-mono">{stock.step5.sellPrice || '-'}</span></div>
+                          <div className={`p-2 rounded-full bg-slate-800 text-slate-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}><ChevronDown className="w-5 h-5" /></div>
                         </div>
                       </div>
-
-                      {/* Card Body */}
                       {isExpanded && (
                         <div className="px-5 pb-6 pt-0 border-t border-slate-800/50 bg-slate-950/30 animate-in slide-in-from-top-2 duration-200">
-                          {/* Action Bar */}
                           <div className="flex justify-end gap-2 py-4 mb-2">
-                            <button onClick={(e) => { e.stopPropagation(); editStock(stock); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors">
-                              <Edit3 className="w-3.5 h-3.5" /> 수정
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); setDeleteId(stock.id); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-900/20 hover:bg-rose-900/40 text-rose-500 text-xs font-bold transition-colors">
-                              <Trash2 className="w-3.5 h-3.5" /> 삭제
-                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); editStock(stock); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors"><Edit3 className="w-3.5 h-3.5" /> 수정</button>
+                            <button onClick={(e) => { e.stopPropagation(); setDeleteId(stock.id); }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-900/20 hover:bg-rose-900/40 text-rose-500 text-xs font-bold transition-colors"><Trash2 className="w-3.5 h-3.5" /> 삭제</button>
                           </div>
-
-                          {/* Content Grid */}
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            
-                            {/* 1. Business */}
                             <div className="col-span-1 md:col-span-2 space-y-2">
-                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold">
-                                <PieChart className="w-4 h-4" /> 사업 모델
-                              </div>
-                              <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">
-                                {stock.step1.business || "내용 없음"}
-                              </div>
+                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold"><PieChart className="w-4 h-4" /> 사업 모델</div>
+                              <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{stock.step1.business || "내용 없음"}</div>
                             </div>
-
-                            {/* 2. Financials */}
                             <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold">
-                                <BarChart3 className="w-4 h-4" /> 재무 & 실적
-                              </div>
+                              <div className="flex items-center gap-2 text-emerald-400 text-sm font-bold"><BarChart3 className="w-4 h-4" /> 재무 & 실적</div>
                               <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm space-y-2">
                                 {stock.step2.revenue && <p><span className="text-slate-500">매출:</span> {stock.step2.revenue}</p>}
                                 {stock.step2.profit && <p><span className="text-slate-500">영업이익:</span> {stock.step2.profit}</p>}
-                                <div className="pt-2 border-t border-slate-700/50 mt-2 text-xs text-slate-400 whitespace-pre-wrap">
-                                  {stock.step2.comparison}
-                                </div>
+                                <div className="pt-2 border-t border-slate-700/50 mt-2 text-xs text-slate-400 whitespace-pre-wrap">{stock.step2.comparison}</div>
                               </div>
                             </div>
-
-                            {/* 3. News */}
                             <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-amber-400 text-sm font-bold">
-                                <Newspaper className="w-4 h-4" /> 이슈
-                              </div>
+                              <div className="flex items-center gap-2 text-amber-400 text-sm font-bold"><Newspaper className="w-4 h-4" /> 이슈</div>
                               <div className="p-4 rounded-xl bg-slate-800/50 text-sm space-y-3">
-                                {stock.step3.goodNews && (
-                                  <div className="flex gap-2">
-                                    <Plus className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-                                    <span className="text-emerald-100/80 whitespace-pre-wrap">{stock.step3.goodNews}</span>
-                                  </div>
-                                )}
-                                {stock.step3.badNews && (
-                                  <div className="flex gap-2">
-                                    <AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-                                    <span className="text-rose-100/80 whitespace-pre-wrap">{stock.step3.badNews}</span>
-                                  </div>
-                                )}
+                                {stock.step3.goodNews && <div className="flex gap-2"><Plus className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" /><span className="text-emerald-100/80 whitespace-pre-wrap">{stock.step3.goodNews}</span></div>}
+                                {stock.step3.badNews && <div className="flex gap-2"><AlertCircle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" /><span className="text-rose-100/80 whitespace-pre-wrap">{stock.step3.badNews}</span></div>}
                               </div>
                             </div>
-
-                            {/* 4. Chart */}
                             <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-purple-400 text-sm font-bold">
-                                <TrendingUp className="w-4 h-4" /> 차트 분석
-                              </div>
+                              <div className="flex items-center gap-2 text-purple-400 text-sm font-bold"><TrendingUp className="w-4 h-4" /> 차트 분석</div>
                               <div className="p-4 rounded-xl bg-slate-800/50 text-slate-300 text-sm space-y-2">
                                 <div className="flex gap-4">
                                   {stock.step4.support && <span className="bg-slate-700/50 px-2 py-1 rounded text-xs">지지: {stock.step4.support}</span>}
@@ -739,15 +518,10 @@ export default function App() {
                                 <p className="whitespace-pre-wrap leading-relaxed">{stock.step4.trend}</p>
                               </div>
                             </div>
-
-                            {/* 5. Strategy */}
                             <div className="space-y-2">
-                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold">
-                                <Target className="w-4 h-4" /> 최종 결론
-                              </div>
+                              <div className="flex items-center gap-2 text-blue-400 text-sm font-bold"><Target className="w-4 h-4" /> 최종 결론</div>
                               <div className="p-4 rounded-xl bg-blue-900/10 border border-blue-500/20 text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">{stock.step5.reasoning}</div>
                             </div>
-
                           </div>
                         </div>
                       )}
