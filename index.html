@@ -1,56 +1,48 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { 
-  Plus, 
-  Trash2, 
-  Save, 
-  ChevronRight, 
-  ChevronLeft, 
-  BarChart3, 
-  TrendingUp, 
-  Newspaper, 
-  PieChart, 
-  Target,
-  Search,
-  LogOut,
-  Calendar,
-  Edit3,
-  Loader2,
-  AlertCircle,
-  Check,
-  RefreshCw,
-  ChevronDown,
-  ChevronUp,
-  User,
-  Filter,
-  Tag,
-  X
+  Plus, Trash2, Save, ChevronRight, ChevronLeft, BarChart3, TrendingUp, Newspaper, 
+  PieChart, Target, Search, LogOut, Calendar, Edit3, Loader2, AlertCircle, Check, 
+  RefreshCw, ChevronDown, User, Tag, X, Cloud 
 } from 'lucide-react';
 
-// --- Firebase Configuration ---
-const firebaseConfig = JSON.parse(__firebase_config);
+// ==================================================================================
+// [서버 동기화 설정]
+// 1. 영어 공부 앱에서 사용했던 Firebase 설정값을 그대로 사용하셔도 됩니다.
+// 2. 이 앱의 데이터는 'stock-analysis-note'라는 이름으로 따로 저장되므로 섞이지 않습니다.
+// ==================================================================================
+let firebaseConfig;
+try {
+  // 미리보기 환경용 자동 설정
+  firebaseConfig = JSON.parse(__firebase_config);
+} catch (e) {
+  // 깃허브 배포 시 이곳에 본인의 Firebase 키를 입력하세요. (영어 앱 키와 동일해도 OK)
+  firebaseConfig = {
+   apiKey: "AIzaSyDi1i0_5PxnWxg-7NrDtwPaIOr_WNplSSk",
+                authDomain: "self-improvement-aa934.firebaseapp.com",
+                projectId: "self-improvement-aa934",
+                storageBucket: "self-improvement-aa934.firebasestorage.app",
+                messagingSenderId: "141457601477",
+                appId: "1:141457601477:web:5f81c11d0f1dff8384d1ac",
+                measurementId: "G-HS8HFK7YMQ"
+  };
+}
+
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+// 이 ID 덕분에 영어 앱 데이터와 섞이지 않습니다.
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'stock-analysis-note';
 
 // --- Constants ---
 const SECTOR_OPTIONS = [
-  'AI/반도체',
-  '2차전지',
-  '화장품/뷰티',
-  '지주사',
-  '금융/증권',
-  '자동차/운송',
-  '바이오/헬스케어',
-  '통신/미디어',
-  '소비재/유통',
-  '기타'
+  'AI/반도체', '2차전지', '화장품/뷰티', '지주사', '금융/증권',
+  '자동차/운송', '바이오/헬스케어', '통신/미디어', '소비재/유통', '기타'
 ];
 
-// --- Example Data ---
+// --- Example Data (자동 생성용) ---
 const getExampleData = () => [
   {
     id: `sds-example`,
@@ -119,14 +111,14 @@ export default function App() {
   const [deleteId, setDeleteId] = useState(null);
   const [expandedStockId, setExpandedStockId] = useState(null);
   const [tempId, setTempId] = useState('');
-  const [selectedSector, setSelectedSector] = useState('전체'); // Sector Filter State
-  const [searchQuery, setSearchQuery] = useState(''); // Search Query State
+  const [selectedSector, setSelectedSector] = useState('전체');
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Initial State for New Analysis
+  // Initial State
   const initialStockState = {
     id: '',
     name: '',
-    sector: '기타', // Default Sector
+    sector: '기타',
     date: new Date().toISOString().split('T')[0],
     step1: { business: '' },
     step2: { revenue: '', profit: '', netIncome: '', comparison: '' },
@@ -137,9 +129,10 @@ export default function App() {
 
   const [formData, setFormData] = useState(initialStockState);
 
-  // --- Auth & Init Logic ---
+  // --- 1. Auth & Init ---
   useEffect(() => {
     const initAuth = async () => {
+      // 로컬 스토리지에서 ID 확인 (없으면 생성)
       let savedId = localStorage.getItem('stock_app_user_id');
       if (!savedId) {
         savedId = `user-${Math.random().toString(36).substr(2, 6)}`;
@@ -148,6 +141,7 @@ export default function App() {
       setUserIdInput(savedId);
       setTempId(savedId);
 
+      // Firebase 로그인
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
@@ -166,26 +160,33 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // --- Data Fetching ---
+  // --- 2. Data Sync (Firestore) ---
   useEffect(() => {
     if (!user || !userIdInput) return;
     setLoading(true);
 
+    // 사용자 ID별 컬렉션 구독
     const q = collection(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput);
+    
     const unsubscribe = onSnapshot(q, async (snapshot) => {
       const stockList = [];
       snapshot.forEach((doc) => stockList.push({ id: doc.id, ...doc.data() }));
       
-      const seedKey = `seeded_${userIdInput}_v2`; 
+      // 자동 데이터 시딩 (처음 사용하는 ID일 경우 예시 데이터 추가)
+      const seedKey = `seeded_${userIdInput}_v3`; 
       const hasSeeded = localStorage.getItem(seedKey);
 
       if (stockList.length === 0 && !hasSeeded) {
         const examples = getExampleData();
         for (const ex of examples) {
-          await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, ex.id), {
-            ...ex,
-            updatedAt: serverTimestamp()
-          });
+          try {
+            await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'stocks_' + userIdInput, ex.id), {
+              ...ex,
+              updatedAt: serverTimestamp()
+            });
+          } catch (e) {
+            console.error("Seeding failed", e);
+          }
         }
         localStorage.setItem(seedKey, 'true');
       } else {
@@ -204,10 +205,11 @@ export default function App() {
   // --- Handlers ---
   const handleIdChange = (e) => {
     e.preventDefault();
-    if (tempId.trim() !== userIdInput) {
-      setUserIdInput(tempId.trim());
-      localStorage.setItem('stock_app_user_id', tempId.trim());
-      setStocks([]); 
+    const newId = tempId.trim();
+    if (newId && newId !== userIdInput) {
+      setUserIdInput(newId);
+      localStorage.setItem('stock_app_user_id', newId);
+      setStocks([]); // 데이터 로딩 중 화면 클리어
     }
     setIsIdEditing(false);
   };
@@ -228,7 +230,7 @@ export default function App() {
       setIsEditing(false);
       setFormData(initialStockState);
       setActiveStep(1);
-      setExpandedStockId(stockId);
+      setExpandedStockId(stockId); // 저장 후 해당 항목 펼치기
     } catch (error) {
       console.error("Save error", error);
     }
@@ -250,6 +252,7 @@ export default function App() {
     }
   };
 
+  // --- Helper Functions ---
   const startNewAnalysis = () => {
     setFormData({ ...initialStockState, date: new Date().toISOString().split('T')[0] });
     setIsEditing(true);
@@ -278,7 +281,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white">
         <Loader2 className="w-12 h-12 animate-spin text-blue-500 mb-4" />
-        <p className="text-slate-400 font-medium text-lg">데이터 불러오는 중...</p>
+        <p className="text-slate-400 font-medium text-lg">데이터 동기화 중...</p>
       </div>
     );
   }
@@ -295,7 +298,7 @@ export default function App() {
               <h3 className="text-xl font-bold">삭제하시겠습니까?</h3>
             </div>
             <p className="text-slate-400 text-sm mb-6 leading-relaxed">
-              이 작업은 되돌릴 수 없습니다.
+              이 작업은 클라우드에서 영구적으로 삭제됩니다.
             </p>
             <div className="flex gap-3">
               <button onClick={() => setDeleteId(null)} className="flex-1 px-4 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold transition-colors">취소</button>
@@ -314,6 +317,7 @@ export default function App() {
           <h2 className="text-lg font-bold tracking-tight text-white hidden sm:block">STOCK NOTE</h2>
         </div>
         
+        {/* User ID Section */}
         <div className="flex items-center gap-2 bg-slate-800/50 rounded-full pl-4 pr-1 py-1 border border-slate-700/50 hover:border-blue-500/50 transition-colors">
           <User className="w-4 h-4 text-slate-400" />
           {isIdEditing ? (
@@ -331,7 +335,7 @@ export default function App() {
             <span 
               onClick={() => { setTempId(userIdInput); setIsIdEditing(true); }}
               className="text-sm text-slate-300 cursor-pointer hover:text-white font-mono w-24 sm:w-32 truncate"
-              title="클릭하여 ID 변경"
+              title="클릭하여 ID 변경 (데이터 동기화용)"
             >
               {userIdInput}
             </span>
@@ -362,7 +366,7 @@ export default function App() {
                   disabled={!formData.name}
                   className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-500/20"
                 >
-                  <Save className="w-4 h-4" /> 저장
+                  <Save className="w-4 h-4" /> 저장 (Cloud)
                 </button>
               </div>
             </div>
@@ -388,7 +392,7 @@ export default function App() {
             </div>
 
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-xl">
-              {/* Header Inputs: Name, Date, Sector */}
+              {/* Header Inputs */}
               {activeStep === 1 && (
                 <div className="mb-8 grid grid-cols-1 sm:grid-cols-2 gap-5 p-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
                   <div className="col-span-1 sm:col-span-2">
@@ -446,7 +450,6 @@ export default function App() {
                     />
                   </div>
                 )}
-                {/* Steps 2-5 same as before */}
                 {activeStep === 2 && (
                   <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
                     <div className="flex items-center gap-3">
@@ -742,9 +745,7 @@ export default function App() {
                               <div className="flex items-center gap-2 text-blue-400 text-sm font-bold">
                                 <Target className="w-4 h-4" /> 최종 결론
                               </div>
-                              <div className="p-4 rounded-xl bg-blue-900/10 border border-blue-500/20 text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">
-                                {stock.step5.reasoning}
-                              </div>
+                              <div className="p-4 rounded-xl bg-blue-900/10 border border-blue-500/20 text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">{stock.step5.reasoning}</div>
                             </div>
 
                           </div>
